@@ -21,15 +21,6 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Add logging middleware to see all requests
-app.use((req, res, next) => {
-  console.log(`=== MAIN APP MIDDLEWARE ===`);
-  console.log(`Method: ${req.method}`);
-  console.log(`URL: ${req.originalUrl}`);
-  console.log(`Path: ${req.path}`);
-  next();
-});
-
 // Basic route (must be before 404 handler)
 app.get('/', (req, res) => {
   res.json({ message: 'SetuWorks API is running!' });

@@ -8,21 +8,46 @@ const router = express.Router();
 
 // Add middleware to log all requests to workers routes (MUST be first)
 router.use((req, res, next) => {
-  console.log(`=== WORKERS ROUTE MIDDLEWARE ===`);
-  console.log(`Method: ${req.method}`);
-  console.log(`URL: ${req.originalUrl}`);
-  console.log(`Path: ${req.path}`);
-  console.log(`Params:`, req.params);
   next();
 });
 
 // Test endpoint to verify routes are loading
 router.get('/test', (req, res) => {
-  console.log('=== WORKERS TEST ENDPOINT CALLED ===');
   res.json({
     success: true,
     message: 'Workers routes are working!'
   });
+});
+
+// Test database connection endpoint
+router.get('/test-db', async (req, res) => {
+  try {
+    // Test database connection
+    const dbState = mongoose.connection.readyState;
+    
+    // Test basic query
+    const userCount = await User.countDocuments();
+    const contractorCount = await User.countDocuments({ role: 'contractor' });
+    const workerCount = await User.countDocuments({ role: { $in: ['worker', 'independent_worker'] } });
+    
+    res.json({
+      success: true,
+      message: 'Database connection test successful',
+      stats: {
+        connectionState: dbState,
+        totalUsers: userCount,
+        contractors: contractorCount,
+        workers: workerCount
+      }
+    });
+  } catch (error) {
+    console.error('Database test error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Database test failed',
+      error: error.message
+    });
+  }
 });
 
 // @route   GET /api/workers/contractor-details/:contractorId
@@ -107,7 +132,15 @@ router.get('/contractor/:contractorId', protect, async (req, res) => {
   try {
     const { contractorId } = req.params;
     
-    // Verify that the requesting user is the contractor or admin
+    // Validate contractor ID format first
+    if (!mongoose.Types.ObjectId.isValid(contractorId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid contractor ID format'
+      });
+    }
+    
+    // Verify that requesting user is contractor or admin
     if (req.user.role !== 'admin' && req.user._id.toString() !== contractorId) {
       return res.status(403).json({
         success: false,
@@ -115,12 +148,14 @@ router.get('/contractor/:contractorId', protect, async (req, res) => {
       });
     }
 
+    // Find workers for this contractor
     const workers = await User.find({ 
       contractor: contractorId,
       role: { $in: ['worker', 'independent_worker'] }
     })
-    .select('-password averageRating totalRatings')
-    .sort({ createdAt: -1 });
+    .select('-password -averageRating -totalRatings')
+    .sort({ createdAt: -1 })
+    .lean();
 
     res.json({
       success: true,
