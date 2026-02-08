@@ -1547,4 +1547,425 @@ router.post('/recalculate-ratings', protect, authorize('admin'), async (req, res
   }
 });
 
+// @route   GET /api/auth/dashboard-stats
+// @desc    Get comprehensive dashboard statistics for admin
+// @access  Private, Admin
+router.get('/dashboard-stats', protect, authorize('admin'), async (req, res) => {
+  try {
+    console.log('=== FETCHING DASHBOARD STATS ===');
+    const { timeRange = '7d' } = req.query;
+    
+    // Calculate date range based on timeRange
+    const now = new Date();
+    let startDate = new Date();
+    
+    switch (timeRange) {
+      case '24h':
+        startDate.setHours(now.getHours() - 24);
+        break;
+      case '7d':
+        startDate.setDate(now.getDate() - 7);
+        break;
+      case '30d':
+        startDate.setDate(now.getDate() - 30);
+        break;
+      case '90d':
+        startDate.setDate(now.getDate() - 90);
+        break;
+      default:
+        startDate.setDate(now.getDate() - 7);
+    }
+    
+    // Get user statistics
+    const userStats = await User.aggregate([
+      { $match: { createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          customers: {
+            $sum: { $cond: [{ $eq: ['$role', 'customer'] }, 1, 0] }
+          },
+          workers: {
+            $sum: { $cond: [{ $eq: ['$role', 'worker'] }, 1, 0] }
+          },
+          contractors: {
+            $sum: { $cond: [{ $eq: ['$role', 'contractor'] }, 1, 0] }
+          },
+          independentWorkers: {
+            $sum: { $cond: [{ $eq: ['$role', 'independent_worker'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+    
+    // Get job statistics
+    const Job = require('../models/Job');
+    const jobStats = await Job.aggregate([
+      { $match: { createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          pending: {
+            $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
+          },
+          assigned: {
+            $sum: { $cond: [{ $eq: ['$status', 'assigned'] }, 1, 0] }
+          },
+          inProgress: {
+            $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] }
+          },
+          completed: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          },
+          cancelled: {
+            $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+    
+    // Get booking statistics
+    const bookingStats = await Booking.aggregate([
+      { $match: { createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          pending: {
+            $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
+          },
+          confirmed: {
+            $sum: { $cond: [{ $eq: ['$status', 'confirmed'] }, 1, 0] }
+          },
+          in_progress: {
+            $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] }
+          },
+          completed: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          },
+          cancelled: {
+            $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] }
+          },
+          rejected: {
+            $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+    
+    // Get transaction statistics
+    const transactionStats = await Transaction.aggregate([
+      { $match: { status: 'completed', createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          totalAmount: { $sum: '$amount' },
+          recharge: {
+            $sum: { $cond: [{ $eq: ['$type', 'recharge'] }, '$amount', 0] }
+          },
+          payments: {
+            $sum: { $cond: [{ $eq: ['$type', 'payment'] }, '$amount', 0] }
+          },
+          earnings: {
+            $sum: { $cond: [{ $eq: ['$type', 'earning'] }, '$amount', 0] }
+          }
+        }
+      }
+    ]);
+    
+    // Get revenue statistics (commission from completed jobs)
+    const revenueStats = await Job.aggregate([
+      { $match: { status: 'completed', createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$commissionAmount' },
+          thisMonth: {
+            $sum: {
+              $cond: [
+                {
+                  $gte: ['$completedDate', new Date(now.getFullYear(), now.getMonth(), 1)]
+                },
+                '$commissionAmount',
+                0
+              ]
+            }
+          },
+          lastMonth: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $gte: ['$completedDate', new Date(now.getFullYear(), now.getMonth() - 1, 1) ] },
+                    { $lt: ['$completedDate', new Date(now.getFullYear(), now.getMonth(), 1) ] }
+                  ]
+                },
+                '$commissionAmount',
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+    
+    // Get rating statistics
+    const Rating = require('../models/Rating');
+    const ratingStats = await Rating.aggregate([
+      { $match: { createdAt: { $gte: startDate } } },
+      {
+        $group: {
+          _id: null,
+          average: { $avg: '$rating' },
+          total: { $sum: 1 },
+          distribution: {
+            $push: '$rating'
+          }
+        }
+      }
+    ]);
+    
+    // Format rating distribution
+    let ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    if (ratingStats.length > 0 && ratingStats[0].distribution) {
+      ratingStats[0].distribution.forEach(rating => {
+        ratingDistribution[rating] = (ratingDistribution[rating] || 0) + 1;
+      });
+    }
+    
+    const dashboardData = {
+      users: userStats[0] || {
+        total: 0,
+        customers: 0,
+        workers: 0,
+        contractors: 0,
+        independentWorkers: 0
+      },
+      jobs: jobStats[0] || {
+        total: 0,
+        pending: 0,
+        assigned: 0,
+        inProgress: 0,
+        completed: 0,
+        cancelled: 0
+      },
+      bookings: bookingStats[0] || {
+        total: 0,
+        pending: 0,
+        confirmed: 0,
+        in_progress: 0,
+        completed: 0,
+        cancelled: 0,
+        rejected: 0
+      },
+      transactions: transactionStats[0] || {
+        total: 0,
+        totalAmount: 0,
+        recharge: 0,
+        payments: 0,
+        earnings: 0
+      },
+      revenue: revenueStats[0] || {
+        total: 0,
+        thisMonth: 0,
+        lastMonth: 0,
+        commission: 0
+      },
+      ratings: {
+        average: ratingStats[0] ? Math.round(ratingStats[0].average * 10) / 10 : 0,
+        total: ratingStats[0] ? ratingStats[0].total : 0,
+        distribution: ratingDistribution
+      }
+    };
+    
+    // Set commission to match total revenue
+    dashboardData.revenue.commission = dashboardData.revenue.total;
+    
+    console.log('Dashboard stats calculated:', dashboardData);
+    
+    res.json({
+      success: true,
+      data: dashboardData
+    });
+  } catch (error) {
+    console.error('Get dashboard stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching dashboard statistics'
+    });
+  }
+});
+
+// @route   GET /api/auth/user-stats
+// @desc    Get user statistics by role
+// @access  Private, Admin
+router.get('/user-stats', protect, authorize('admin'), async (req, res) => {
+  try {
+    const userStats = await User.aggregate([
+      {
+        $group: {
+          _id: '$role',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    const formattedStats = {};
+    userStats.forEach(stat => {
+      formattedStats[stat._id] = stat.count;
+    });
+    
+    res.json({
+      success: true,
+      data: formattedStats
+    });
+  } catch (error) {
+    console.error('Get user stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching user statistics'
+    });
+  }
+});
+
+// @route   GET /api/auth/job-stats
+// @desc    Get job statistics by status
+// @access  Private, Admin
+router.get('/job-stats', protect, authorize('admin'), async (req, res) => {
+  try {
+    const Job = require('../models/Job');
+    const jobStats = await Job.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    const formattedStats = {};
+    jobStats.forEach(stat => {
+      formattedStats[stat._id] = stat.count;
+    });
+    
+    res.json({
+      success: true,
+      data: formattedStats
+    });
+  } catch (error) {
+    console.error('Get job stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching job statistics'
+    });
+  }
+});
+
+// @route   GET /api/auth/booking-stats
+// @desc    Get booking statistics by status
+// @access  Private, Admin
+router.get('/booking-stats', protect, authorize('admin'), async (req, res) => {
+  try {
+    const bookingStats = await Booking.getBookingStats();
+    const formattedStats = bookingStats[0] || {};
+    
+    res.json({
+      success: true,
+      data: formattedStats
+    });
+  } catch (error) {
+    console.error('Get booking stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching booking statistics'
+    });
+  }
+});
+
+// @route   GET /api/auth/transaction-stats
+// @desc    Get transaction statistics by type
+// @access  Private, Admin
+router.get('/transaction-stats', protect, authorize('admin'), async (req, res) => {
+  try {
+    const transactionStats = await Transaction.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: '$type',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$amount' }
+        }
+      }
+    ]);
+    
+    const formattedStats = {};
+    transactionStats.forEach(stat => {
+      formattedStats[stat._id] = {
+        count: stat.count,
+        totalAmount: stat.totalAmount
+      };
+    });
+    
+    res.json({
+      success: true,
+      data: formattedStats
+    });
+  } catch (error) {
+    console.error('Get transaction stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching transaction statistics'
+    });
+  }
+});
+
+// @route   GET /api/auth/rating-stats
+// @desc    Get rating statistics
+// @access  Private, Admin
+router.get('/rating-stats', protect, authorize('admin'), async (req, res) => {
+  try {
+    const Rating = require('../models/Rating');
+    const ratingStats = await Rating.aggregate([
+      {
+        $group: {
+          _id: null,
+          average: { $avg: '$rating' },
+          total: { $sum: 1 },
+          distribution: {
+            $push: '$rating'
+          }
+        }
+      }
+    ]);
+    
+    // Format rating distribution
+    let ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    if (ratingStats.length > 0 && ratingStats[0].distribution) {
+      ratingStats[0].distribution.forEach(rating => {
+        ratingDistribution[rating] = (ratingDistribution[rating] || 0) + 1;
+      });
+    }
+    
+    const formattedStats = {
+      average: ratingStats[0] ? Math.round(ratingStats[0].average * 10) / 10 : 0,
+      total: ratingStats[0] ? ratingStats[0].total : 0,
+      distribution: ratingDistribution
+    };
+    
+    res.json({
+      success: true,
+      data: formattedStats
+    });
+  } catch (error) {
+    console.error('Get rating stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching rating statistics'
+    });
+  }
+});
+
 module.exports = router;

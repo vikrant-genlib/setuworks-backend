@@ -8,6 +8,7 @@ const jobRoutes = require('./routes/jobs');
 const workerRoutes = require('./routes/workers');
 const contractorRoutes = require('./routes/contractor');
 const customerRoutes = require('./routes/customer');
+const adminSettingsRoutes = require('./routes/adminSettings');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -40,6 +41,7 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/workers', workerRoutes);
 app.use('/api/contractor', contractorRoutes);
 app.use('/api/customer', customerRoutes);
+app.use('/api/admin-settings', adminSettingsRoutes);
 
 // Database connection
 mongoose.connect(process.env.MONGO_URL)
