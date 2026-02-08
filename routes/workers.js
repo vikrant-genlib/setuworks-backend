@@ -119,7 +119,7 @@ router.get('/contractor/:contractorId', protect, async (req, res) => {
       contractor: contractorId,
       role: { $in: ['worker', 'independent_worker'] }
     })
-    .select('-password')
+    .select('-password averageRating totalRatings')
     .sort({ createdAt: -1 });
 
     res.json({

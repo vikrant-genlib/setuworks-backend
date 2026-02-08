@@ -36,7 +36,7 @@ router.get('/bookings', protect, authorize('customer'), async (req, res) => {
 
     // Populate additional fields that might be needed
     const populatedBookings = await Booking.populate(result.bookings, [
-      { path: 'workerId', select: 'name phone email skillType profilePicture' },
+      { path: 'workerId', select: 'name phone email skillType profilePicture averageRating totalRatings' },
       { path: 'contractorId', select: 'name email phone' }
     ]);
 
@@ -70,7 +70,7 @@ router.get('/bookings/:id', protect, authorize('customer'), async (req, res) => 
       _id: bookingId,
       customerId: customerId
     })
-    .populate('workerId', 'name phone email skillType profilePicture')
+    .populate('workerId', 'name phone email skillType profilePicture averageRating totalRatings')
     .populate('contractorId', 'name phone email')
     .exec();
 
@@ -200,7 +200,7 @@ router.get('/dashboard-stats', protect, authorize('customer'), async (req, res) 
 
     // Get recent bookings with full population
     const recentBookings = await Booking.find({ customerId })
-      .populate('workerId', 'name skillType profilePicture')
+      .populate('workerId', 'name skillType profilePicture averageRating totalRatings')
       .populate('contractorId', 'name')
       .sort({ createdAt: -1 })
       .limit(5)
@@ -269,7 +269,7 @@ router.get('/workers', protect, authorize('customer'), async (req, res) => {
     }
 
     const workers = await User.find(query)
-      .select('name email phone skillType location profilePicture contractor')
+      .select('name email phone skillType location profilePicture contractor averageRating totalRatings')
       .populate('contractor', 'name')
       .sort({ createdAt: -1 })
       .limit(50);
@@ -319,9 +319,9 @@ router.post('/bookings', protect, authorize('customer'), async (req, res) => {
 
     await newBooking.save();
 
-    // Populate the booking with worker and contractor details
+    // Populate booking with worker and contractor details
     const populatedBooking = await Booking.findById(newBooking._id)
-      .populate('workerId', 'name phone email skillType')
+      .populate('workerId', 'name phone email skillType averageRating totalRatings')
       .populate('contractorId', 'name');
 
     console.log('New booking created successfully');
@@ -392,7 +392,7 @@ router.put('/bookings/:id', protect, authorize('customer'), async (req, res) => 
 
     // Populate updated booking
     const updatedBooking = await Booking.findById(booking._id)
-      .populate('workerId', 'name phone email skillType')
+      .populate('workerId', 'name phone email skillType averageRating totalRatings')
       .populate('contractorId', 'name');
 
     console.log('Booking updated successfully');
@@ -491,6 +491,12 @@ router.post('/ratings', protect, authorize('customer'), async (req, res) => {
 
     await newRating.save();
 
+    // Update the booking to mark it as rated
+    await Booking.findByIdAndUpdate(bookingId, {
+      hasRated: true,
+      ratingSubmittedAt: new Date()
+    });
+
     console.log('Rating submitted successfully');
 
     res.status(201).json({
@@ -517,6 +523,95 @@ router.post('/ratings', protect, authorize('customer'), async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while submitting rating'
+    });
+  }
+});
+
+// @route   DELETE /api/customer/ratings/:bookingId
+// @desc    Delete a rating for a booking
+// @access  Private (Customer only)
+router.delete('/ratings/:bookingId', protect, authorize('customer'), async (req, res) => {
+  try {
+    console.log('=== DELETING RATING ===');
+    console.log('Customer ID:', req.user.id);
+    console.log('Booking ID:', req.params.bookingId);
+
+    const bookingId = req.params.bookingId;
+    const customerId = req.user.id;
+
+    // Find the booking first
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    // Verify booking belongs to the customer
+    if (booking.customerId.toString() !== customerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only delete ratings for your own bookings'
+      });
+    }
+
+    // Find and delete the rating
+    const deletedRating = await Rating.findOneAndDelete({ 
+      bookingId: bookingId, 
+      customerId: customerId 
+    });
+
+    if (!deletedRating) {
+      return res.status(404).json({
+        success: false,
+        message: 'Rating not found'
+      });
+    }
+
+    // Update booking to mark it as not rated
+    await Booking.findByIdAndUpdate(bookingId, {
+      hasRated: false,
+      ratingSubmittedAt: null
+    });
+
+    // Recalculate worker's average rating
+    const ratingStats = await Rating.aggregate([
+      { $match: { workerId: booking.workerId } },
+      {
+        $group: {
+          _id: '$workerId',
+          averageRating: { $avg: '$rating' },
+          totalRatings: { $sum: 1 }
+        }
+      }
+    ]);
+
+    if (ratingStats.length > 0) {
+      const stats = ratingStats[0];
+      await User.findByIdAndUpdate(booking.workerId, {
+        averageRating: Math.round(stats.averageRating * 10) / 10,
+        totalRatings: stats.totalRatings
+      });
+    } else {
+      // Worker has no more ratings
+      await User.findByIdAndUpdate(booking.workerId, {
+        averageRating: 0,
+        totalRatings: 0
+      });
+    }
+
+    console.log('Rating deleted successfully');
+
+    res.json({
+      success: true,
+      message: 'Rating deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete rating error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while deleting rating'
     });
   }
 });

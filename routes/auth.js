@@ -1482,4 +1482,69 @@ router.post('/setup-admin', async (req, res) => {
   }
 });
 
+// @route   POST /api/auth/recalculate-ratings
+// @desc    Manually recalculate all worker ratings (for fixing data)
+// @access  Private, Admin
+router.post('/recalculate-ratings', protect, authorize('admin'), async (req, res) => {
+  try {
+    console.log('=== RECALCULATING ALL WORKER RATINGS ===');
+    
+    const User = require('../models/User');
+    const Rating = require('../models/Rating');
+    
+    // Get all workers
+    const workers = await User.find({ 
+      role: { $in: ['worker', 'independent_worker'] }
+    }).select('_id name');
+    
+    console.log(`Found ${workers.length} workers to update`);
+    
+    let updatedCount = 0;
+    
+    for (const worker of workers) {
+      // Calculate ratings for this worker
+      const ratingStats = await Rating.aggregate([
+        { $match: { workerId: worker._id } },
+        {
+          $group: {
+            _id: '$workerId',
+            averageRating: { $avg: '$rating' },
+            totalRatings: { $sum: 1 }
+          }
+        }
+      ]);
+      
+      if (ratingStats.length > 0) {
+        const stats = ratingStats[0];
+        await User.findByIdAndUpdate(worker._id, {
+          averageRating: Math.round(stats.averageRating * 10) / 10,
+          totalRatings: stats.totalRatings
+        });
+        
+        console.log(`Updated ${worker.name}: Rating=${stats.averageRating} (${stats.totalRatings} ratings)`);
+        updatedCount++;
+      } else {
+        // Reset to 0 if no ratings
+        await User.findByIdAndUpdate(worker._id, {
+          averageRating: 0,
+          totalRatings: 0
+        });
+        
+        console.log(`Reset ${worker.name}: No ratings found`);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Recalculated ratings for ${updatedCount} workers`
+    });
+  } catch (error) {
+    console.error('Recalculate ratings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while recalculating ratings'
+    });
+  }
+});
+
 module.exports = router;

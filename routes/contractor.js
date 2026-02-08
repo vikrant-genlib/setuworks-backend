@@ -152,7 +152,7 @@ router.get('/contractor-requests', protect, authorize('contractor'), async (req,
       contractorId: contractorId
     })
     .populate('customerId', 'name phone email profilePicture')
-    .populate('workerId', 'name skillType')
+    .populate('workerId', 'name skillType averageRating totalRatings')
     .sort({ createdAt: -1 });
 
     console.log(`Found ${jobRequests.length} job requests for contractor`);
@@ -335,7 +335,7 @@ router.get('/active-jobs', protect, authorize('contractor'), async (req, res) =>
     // Get active jobs with pagination
     const jobs = await Booking.find(query)
       .populate('customerId', 'name phone email profilePicture')
-      .populate('workerId', 'name phone email profilePicture skillType')
+      .populate('workerId', 'name phone email profilePicture skillType averageRating totalRatings')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit)
